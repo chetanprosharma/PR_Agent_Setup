@@ -1,3 +1,5 @@
+name: PR Agent Review
+
 on:
   pull_request:
     types: [opened, reopened, ready_for_review]
@@ -6,8 +8,11 @@ on:
 
 jobs:
   pr_agent_job:
+    # Do not react to bot comments
     if: ${{ github.event.sender.type != 'Bot' }}
-    runs-on: self-hosted   # REQUIRED for Ollama
+
+    # REQUIRED: self-hosted runner (WSL/Linux)
+    runs-on: self-hosted
 
     permissions:
       issues: write
@@ -15,31 +20,46 @@ jobs:
       contents: write
 
     env:
-      OLLAMA_BASE_URL: http://localhost:11434
-      LITELLM_REQUEST_TIMEOUT: "300"
-      LITELLM_TIMEOUT: "300"
+      # Ollama endpoint (Docker or local Ollama)
+      OLLAMA_BASE_URL: "http://192.168.28.138:11434"
+      # OLLAMA_HOST: "http://host.docker.internal:11434"
+
+      # LiteLLM stability (CPU-safe)
+      PR_AGENT_LLM_PROVIDER: "litellm"
+      LITELLM_REQUEST_TIMEOUT: "600"
+      LITELLM_TIMEOUT: "600"
+      LITELLM_MAX_RETRIES: "2"
+
+      # CPU tuning
+      PR_AGENT_MAX_TOKENS: "8192"
+      PR_AGENT_TEMPERATURE: "0.2"
+      PR_AGENT_TOP_P: "0.9"
+      PR_AGENT_PARALLEL_REQUESTS: "1"
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - name: Health check - Ollama
+        run: curl -f $OLLAMA_BASE_URL/api/tags
+      - name: Run PR Agent
+        uses: qodo-ai/pr-agent@main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ⬇️ ONLY THIS STEP IS CHANGED ⬇️
-      - name: Run PR Agent (Custom Docker)
-        run: |
-          docker run --rm \
-            --network=host \
-            -e GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" \
-            -e OPENAI_KEY="${{ secrets.OPENAI_KEY }}" \
-            -e OLLAMA_BASE_URL="http://localhost:11434" \
-            -e LITELLM_TIMEOUT=300 \
-            -e LITELLM_REQUEST_TIMEOUT=300 \
-            -e PR_AGENT_MODEL="ollama/deepseek-coder:6.7b" \
-            -e PR_AGENT_FALLBACK_MODELS='["ollama/qwen2.5-coder:7b","ollama/codellama:7b"]' \
-            -e PR_AGENT_MAX_TOKENS=32768 \
-            -e PR_AGENT_AUTO_REVIEW=true \
-            -e PR_AGENT_AUTO_DESCRIBE=true \
-            -e PR_AGENT_AUTO_IMPROVE=false \
-            -e PR_AGENT_RESPOND_TO_COMMENTS=true \
-            -e PR_AGENT_PR_ACTIONS='["opened","reopened","ready_for_review","commented"]' \
-            qodoai/pr-agent:latest
+          # Primary model (best CPU choice)
+          config.model: "ollama/qwen2.5-coder:7b"
 
+          # Automatic fallbacks (fast → slower)
+          config.fallback_models: "ollama/qwen2.5-coder:3b"
+
+          config.custom_model_max_tokens: "8192"
+
+          # Enable PR Agent features
+          github_action_config.auto_review: "true"
+          github_action_config.auto_describe: "true"
+          github_action_config.auto_improve: "false"
+
+          # Enable comment commands like /review /describe
+          github_action_config.respond_to_comments: "true"
+
+          # Events PR Agent reacts to
+          github_action_config.pr_actions: >
+            ["opened","reopened","ready_for_review","commented"]
